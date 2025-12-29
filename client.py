@@ -1,11 +1,12 @@
-from langchain_mcp_adapters import MultiServerMCPClient
-from langchain.agents import create_react_agent
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+import os
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 import asyncio
-import os
+
 
 async def main():
     client = MultiServerMCPClient(
@@ -16,7 +17,7 @@ async def main():
                 "transport": "stdio",
             },
             "weather": {
-                "url": "http://127.0.0.1:8000",
+                "url": "http://127.0.0.1:8000/mcp",
                 "transport": "streamable_http",
             },
         }
@@ -25,6 +26,13 @@ async def main():
     tools = await client.get_tools()
 
     model = ChatGroq(model="qwen-qwq-32b")
-    agent = create_react_agent(tools, model)
+    agent = create_react_agent(model, tools)
+    
 
+    print("Agent ready:", agent)
+
+if __name__=="__main__":
+    asyncio.run(main())
+
+   
     
