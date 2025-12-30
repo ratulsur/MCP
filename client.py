@@ -1,11 +1,17 @@
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
 import os
-from langchain_groq import ChatGroq
-from dotenv import load_dotenv
-load_dotenv()
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 import asyncio
+from dotenv import load_dotenv
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.agents import create_agent
+from langchain_groq import ChatGroq
+
+load_dotenv()
+
+groq_key = os.getenv("GROQ_API_KEY")
+if not groq_key:
+    raise RuntimeError("Missing GROQ_API_KEY in .env or environment")
+os.environ["GROQ_API_KEY"] = groq_key
 
 
 async def main():
@@ -24,15 +30,19 @@ async def main():
     )
 
     tools = await client.get_tools()
+    model = ChatGroq(model="openai/gpt-oss-120b")
+    agent = create_agent(model, tools)
 
-    model = ChatGroq(model="qwen-qwq-32b")
-    agent = create_react_agent(model, tools)
-    
+    response = await agent.ainvoke(
+        {"messages": [("user", "what is (23+12)*23")]}
+    )
 
-    print("Agent ready:", agent)
+    # Full state (debug)
+    # print(response)
 
-if __name__=="__main__":
+    # Final answer text
+    print(response)
+
+
+if __name__ == "__main__":
     asyncio.run(main())
-
-   
-    
