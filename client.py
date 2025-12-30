@@ -37,10 +37,7 @@ async def main():
         {"messages": [("user", "what is (23+12)*23")]}
     )
 
-    # Full state (debug)
-    # print(response)
-
-    # Final answer text
+    
     print(response)
 
 
