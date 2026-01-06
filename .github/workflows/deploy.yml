@@ -23,12 +23,34 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       # Check if EKS Cluster exists
-      - name: Check if EKS Cluster exists
+      - name: Check if EKS Cluster exists (handle AccessDenied)
+        shell: bash
         run: |
-          if ! aws eks describe-cluster --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}; then
+          set -euo pipefail
+          CLUSTER="${{ secrets.EKS_CLUSTER_NAME }}"
+          REGION="${{ secrets.AWS_REGION }}"
+
+          if aws eks describe-cluster --name "$CLUSTER" --region "$REGION" >/tmp/eks.json 2>/tmp/eks.err; then
+            echo "EKS cluster found: $CLUSTER"
+            exit 0
+          fi
+
+          echo "describe-cluster failed:"
+          cat /tmp/eks.err
+
+          if grep -q "AccessDeniedException" /tmp/eks.err; then
+            echo "ERROR: The AWS credentials used by GitHub Actions lack eks:DescribeCluster."
+            exit 1
+          fi
+
+          if grep -q "ResourceNotFoundException" /tmp/eks.err; then
             echo "EKS Cluster not found! Run infra.yml workflow first."
             exit 1
           fi
+
+          echo "ERROR: Unknown AWS error"
+          exit 1
+
 
       # Login to ECR
       - name: Login to Amazon ECR
