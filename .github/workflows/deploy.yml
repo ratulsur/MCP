@@ -2,8 +2,7 @@ name: Deploy MCP server to EKS
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -12,9 +11,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # Configure AWS credentials
+      # Configure AWS credentials (static keys)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -22,8 +21,18 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Check if EKS Cluster exists
-      - name: Check if EKS Cluster exists (handle AccessDenied)
+      # Debug: confirm account/region and what clusters exist
+      - name: Debug AWS identity / region / clusters
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_REGION(secret) = ${{ secrets.AWS_REGION }}"
+          echo "EKS_CLUSTER_NAME(secret) = ${{ secrets.EKS_CLUSTER_NAME }}"
+          aws sts get-caller-identity
+          aws eks list-clusters --region "${{ secrets.AWS_REGION }}"
+
+      # Check if EKS Cluster exists (handle AccessDenied vs NotFound)
+      - name: Check if EKS Cluster exists
         shell: bash
         run: |
           set -euo pipefail
@@ -32,6 +41,7 @@ jobs:
 
           if aws eks describe-cluster --name "$CLUSTER" --region "$REGION" >/tmp/eks.json 2>/tmp/eks.err; then
             echo "EKS cluster found: $CLUSTER"
+            cat /tmp/eks.json
             exit 0
           fi
 
@@ -44,86 +54,95 @@ jobs:
           fi
 
           if grep -q "ResourceNotFoundException" /tmp/eks.err; then
-            echo "EKS Cluster not found! Run infra.yml workflow first."
+            echo "ERROR: EKS cluster not found in this account/region/name combination."
+            echo "Hint: verify AWS_REGION, AWS keys account, and exact EKS_CLUSTER_NAME."
             exit 1
           fi
 
           echo "ERROR: Unknown AWS error"
           exit 1
 
-
       # Login to ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
+      # Set image tag (no deprecated set-output)
       - name: Set Image Tag
         id: image-tag
+        shell: bash
         run: |
-          echo "IMAGE_TAG=$(date +%s)" >> $GITHUB_ENV
-          echo "::set-output name=tag::$(date +%s)"
-      
+          set -euo pipefail
+          TAG=$(date +%s)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "Using IMAGE_TAG=$TAG"
+
       # Build, tag and push Docker image to ECR
       - name: Build and Push Docker image
         env:
           REGISTRY: ${{ secrets.ECR_REGISTRY }}
           REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+        shell: bash
         run: |
-          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG -t $REGISTRY/$REPOSITORY:latest .
-          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
-          docker push $REGISTRY/$REPOSITORY:latest
+          set -euo pipefail
+          echo "Pushing to: $REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker build -t "$REGISTRY/$REPOSITORY:$IMAGE_TAG" -t "$REGISTRY/$REPOSITORY:latest" .
+          docker push "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$REPOSITORY:latest"
 
       # Setup kubectl
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
         with:
-          version: 'latest'
+          version: latest
 
-      # Ensure AWS CLI is installed
-      - name: Install AWS CLI
-        run: |
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip -q awscliv2.zip
-          sudo ./aws/install --update
-          aws --version
-    
+      # Print useful env vars (debug)
       - name: Print Env Vars
+        shell: bash
         run: |
-          echo "Region: ${{ secrets.AWS_REGION }}"
-          echo "Cluster: ${{ secrets.EKS_CLUSTER_NAME }}"  
-      
-      # Update kubeconfig
-      - name: Update kubeconfig with debug
-        run: |
-          aws eks update-kubeconfig \
-            --name $EKS_CLUSTER_NAME \
-            --region $AWS_REGION \
-            --debug
+          echo "Region:  ${{ secrets.AWS_REGION }}"
+          echo "Cluster: ${{ secrets.EKS_CLUSTER_NAME }}"
+          echo "ECR_REGISTRY:   ${{ secrets.ECR_REGISTRY }}"
+          echo "ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}"
+
+      # Update kubeconfig (EKS)
+      - name: Update kubeconfig
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 
       # Debug: Show kubeconfig file
       - name: Show kubeconfig
+        shell: bash
         run: |
           ls -la ~/.kube || true
+          echo "---- ~/.kube/config ----"
           cat ~/.kube/config || true
-      
+
       # Create/Update Kubernetes Secret (for API keys)
       - name: Create Kubernetes secret for API keys
+        shell: bash
         run: |
+          set -euo pipefail
           kubectl create secret generic product-assistant-secrets \
-            --from-literal=OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
-            --from-literal=GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }} \
-            --from-literal=ASTRA_DB_API_ENDPOINT=${{ secrets.ASTRA_DB_API_ENDPOINT }} \
-            --from-literal=ASTRA_DB_APPLICATION_TOKEN=${{ secrets.ASTRA_DB_APPLICATION_TOKEN }} \
-            --from-literal=ASTRA_DB_KEYSPACE=${{ secrets.ASTRA_DB_KEYSPACE }} \
+            --from-literal=OPENAI_API_KEY='${{ secrets.OPENAI_API_KEY }}' \
+            --from-literal=GOOGLE_API_KEY='${{ secrets.GOOGLE_API_KEY }}' \
+            --from-literal=ASTRA_DB_API_ENDPOINT='${{ secrets.ASTRA_DB_API_ENDPOINT }}' \
+            --from-literal=ASTRA_DB_APPLICATION_TOKEN='${{ secrets.ASTRA_DB_APPLICATION_TOKEN }}' \
+            --from-literal=ASTRA_DB_KEYSPACE='${{ secrets.ASTRA_DB_KEYSPACE }}' \
             --dry-run=client -o yaml | kubectl apply -f -
 
       # Deploy manifests
       - name: Apply Kubernetes manifests
+        shell: bash
         run: |
+          set -euo pipefail
           kubectl apply -f k8/deployment.yaml
           kubectl apply -f k8/service.yaml
 
@@ -132,25 +151,31 @@ jobs:
           REGISTRY: ${{ secrets.ECR_REGISTRY }}
           REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+        shell: bash
         run: |
-          kubectl set image deployment/product-assistant product-assistant=$REGISTRY/$REPOSITORY:$IMAGE_TAG
+          set -euo pipefail
+          kubectl set image deployment/product-assistant \
+            product-assistant="$REGISTRY/$REPOSITORY:$IMAGE_TAG"
 
-
-      # Verify rollout
+      # Verify rollout (with debugging on failure)
       - name: Verify Deployment
+        shell: bash
         run: |
-          set -e
-          if ! kubectl rollout status deployment/product-assistant --timeout=120s; then
+          set -euo pipefail
+          if ! kubectl rollout status deployment/product-assistant --timeout=180s; then
             echo "Rollout failed, collecting debug info..."
             kubectl describe deployment product-assistant || true
             kubectl get pods -o wide || true
             for pod in $(kubectl get pods -l app=product-assistant -o jsonpath='{.items[*].metadata.name}'); do
               echo "--- Logs for pod: $pod ---"
-              kubectl logs $pod --all-containers --tail=100 || true
+              kubectl logs "$pod" --all-containers --tail=200 || true
             done
             exit 1
           fi
 
       # Show Service details
       - name: Get Service Info
-        run: kubectl get svc product-assistant-service -o wide
+        shell: bash
+        run: |
+          kubectl get svc product-assistant-service -o wide
+          kubectl describe svc product-assistant-service || true
