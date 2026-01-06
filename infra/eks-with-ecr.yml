@@ -1,19 +1,23 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: Standalone EKS Cluster with NodeGroup and ECR Repository
+Description: EKS Cluster + Managed NodeGroup + ECR Repo for MCP Server
 
 Parameters:
   ClusterName:
     Type: String
-    Default: product-assistant-cluster-latest
+    Default: mcp-cluster
+    Description: Name of the EKS cluster
+
   NodeInstanceType:
     Type: String
     Default: t3.medium
+
   DesiredCapacity:
     Type: Number
     Default: 2
+
   ECRRepositoryName:
     Type: String
-    Default: product-assistant
+    Default: mcp-server
 
 Resources:
   ### --- VPC ---
@@ -25,14 +29,14 @@ Resources:
       EnableDnsHostnames: true
       Tags:
         - Key: Name
-          Value: EKS-VPC
+          Value: !Sub "${ClusterName}-vpc"
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: EKS-IGW
+          Value: !Sub "${ClusterName}-igw"
 
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -49,7 +53,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: PublicSubnet1
+          Value: !Sub "${ClusterName}-public-1"
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -60,7 +64,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: PublicSubnet2
+          Value: !Sub "${ClusterName}-public-2"
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -68,7 +72,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: PublicRouteTable
+          Value: !Sub "${ClusterName}-public-rt"
 
   PublicRoute:
     Type: AWS::EC2::Route
@@ -90,22 +94,25 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
-  ### --- Security Group for EKS ---
+  ### --- Security group for EKS control plane <-> nodes ---
+  # Instead of allowing the whole internet, restrict to VPC CIDR.
   EKSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow communication in EKS cluster
+      GroupDescription: EKS cluster security group
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
+          CidrIp: 10.0.0.0/16
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClusterName}-eks-sg"
 
-  ### --- ECR Repository ---
-
-  ProductAssistantECR:
+  ### --- ECR Repository for MCP server ---
+  MCPServerECR:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Ref ECRRepositoryName
@@ -117,6 +124,7 @@ Resources:
   EKSClusterRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${ClusterName}-cluster-role"
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -139,11 +147,14 @@ Resources:
           - !Ref PublicSubnet2
         SecurityGroupIds:
           - !Ref EKSSecurityGroup
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: false
 
   ### --- IAM Role for NodeGroup ---
   NodeGroupRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${ClusterName}-node-role"
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -152,14 +163,19 @@ Resources:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
+        # Required for worker nodes
         - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        # Pull images from ECR
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        # VPC CNI for pod networking
         - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        # Optional but very handy for debugging/SSM
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 
-    ### --- EKS NodeGroup ---
+  ### --- EKS Managed NodeGroup ---
   NodeGroup:
     Type: AWS::EKS::Nodegroup
-    DependsOn: EKSCluster   # ensures cluster is ready
+    DependsOn: EKSCluster
     Properties:
       ClusterName: !Ref ClusterName
       NodeRole: !GetAtt NodeGroupRole.Arn
@@ -172,15 +188,21 @@ Resources:
         MinSize: 1
       InstanceTypes:
         - !Ref NodeInstanceType
-
+      AmiType: AL2_x86_64
 
 Outputs:
   ECRRepositoryUri:
-    Description: URI of the ECR Repository
-    Value: !GetAtt ProductAssistantECR.RepositoryUri
-    Export:
-      Name: ProductAssistant-ECR-Uri
+    Description: URI of the ECR Repository for MCP server
+    Value: !GetAtt MCPServerECR.RepositoryUri
 
   EKSClusterName:
     Description: Name of the EKS Cluster
     Value: !Ref ClusterName
+
+  NodeGroupRoleArn:
+    Description: NodeGroup role ARN
+    Value: !GetAtt NodeGroupRole.Arn
+
+  ClusterArn:
+    Description: EKS Cluster ARN
+    Value: !GetAtt EKSCluster.Arn
