@@ -1,20 +1,26 @@
-import os
-import asyncio
-from dotenv import load_dotenv
+import os 
+import asyncio 
+from dotenv import load_dotenv 
+from langchain_mcp_adapters.client import MultiServerMCPClient 
+from langchain.agents import create_agent 
+from langchain_groq import ChatGroq
+
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain.agents import create_agent
 from langchain_groq import ChatGroq
+
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate
+
 
 load_dotenv()
 groq_key = os.getenv("GROQ_API_KEY")
 if not groq_key:
     raise RuntimeError("Missing GROQ_API_KEY in .env or environment")
-os.environ["GROQ_API_KEY"] = groq_key
 
 
 async def main():
-    client = MultiServerMCPClient(
+    async with MultiServerMCPClient(
         {
             "calculator": {
                 "command": "python",
@@ -22,23 +28,29 @@ async def main():
                 "transport": "stdio",
             },
             "weather": {
-                "url": "http://127.0.0.1:8000/mcp",
-                "transport": "streamable_http",
+                "url": "http://127.0.0.1:8001/mcp",   # <-- make this distinct
+                "transport": "streamable-http",       # <-- match your server spelling
             },
             "arxiv": {
-                "url": "http://127.0.0.1:8000/mcp",
-                "transport": "streamable_http",
+                "url": "http://127.0.0.1:8002/mcp",   # <-- make this distinct
+                "transport": "streamable-http",
             },
         }
-    )
+    ) as client:
+        tools = await client.get_tools()
 
-    tools = await client.get_tools()
+        llm = ChatGroq(model="openai/gpt-oss-120b")
 
-    model = ChatGroq(model="openai/gpt-oss-120b")
-    agent = create_agent(model, tools)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful assistant. Use tools when useful."),
+            ("human", "{input}"),
+        ])
 
-    response = await agent.ainvoke({"messages": [("user", "what is an embedding?")]})
-    print(response["messages"][-1].content)
+        agent = create_tool_calling_agent(llm, tools, prompt)
+        executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+        result = await executor.ainvoke({"input": "what is an embedding?"})
+        print(result["output"])
 
 
 if __name__ == "__main__":
