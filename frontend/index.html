@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Deploy Test Frontend</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Arial, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 16px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin: 14px 0; }
+    label { display:block; margin: 8px 0 4px; }
+    input { padding: 10px; width: 100%; max-width: 360px; }
+    button { padding: 10px 14px; cursor:pointer; margin-top: 10px; }
+    pre { background:#f6f6f6; padding: 12px; overflow:auto; border-radius: 10px; }
+    .row { display:flex; gap: 12px; flex-wrap: wrap; }
+    .small { color:#666; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Deploy Test Frontend</h1>
+  <p class="small">
+    Set API base URL via <code>?api=http://localhost:8000</code>. Default: <code>http://localhost:8000</code>
+  </p>
+
+  <div class="card">
+    <h2>Health Check</h2>
+    <button onclick="checkHealth()">Check /health</button>
+    <pre id="healthOut">...</pre>
+  </div>
+
+  <div class="card">
+    <h2>Math</h2>
+    <div class="row">
+      <div>
+        <label>A</label>
+        <input id="a" type="number" value="2" />
+      </div>
+      <div>
+        <label>B</label>
+        <input id="b" type="number" value="3" />
+      </div>
+    </div>
+    <div class="row">
+      <button onclick="doAdd()">POST /api/add</button>
+      <button onclick="doMultiply()">POST /api/multiply</button>
+    </div>
+    <pre id="mathOut">...</pre>
+  </div>
+
+  <div class="card">
+    <h2>arXiv Search</h2>
+    <label>Query</label>
+    <input id="q" value="embedding models" />
+    <label>Max Results</label>
+    <input id="mr" type="number" value="5" />
+    <button onclick="doArxiv()">POST /api/arxiv</button>
+    <pre id="arxivOut">...</pre>
+  </div>
+
+<script>
+  function apiBase() {
+    const p = new URLSearchParams(window.location.search);
+    return p.get("api") || "http://localhost:8000";
+  }
+
+  async function postJSON(path, body) {
+    const res = await fetch(apiBase() + path, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const txt = await res.text();
+    try { return JSON.parse(txt); } catch { return { raw: txt, status: res.status }; }
+  }
+
+  async function checkHealth() {
+    const out = document.getElementById("healthOut");
+    out.textContent = "Loading...";
+    const res = await fetch(apiBase() + "/health");
+    out.textContent = await res.text();
+  }
+
+  async function doAdd() {
+    const out = document.getElementById("mathOut");
+    out.textContent = "Loading...";
+    const a = Number(document.getElementById("a").value);
+    const b = Number(document.getElementById("b").value);
+    const data = await postJSON("/api/add", {a, b});
+    out.textContent = JSON.stringify(data, null, 2);
+  }
+
+  async function doMultiply() {
+    const out = document.getElementById("mathOut");
+    out.textContent = "Loading...";
+    const a = Number(document.getElementById("a").value);
+    const b = Number(document.getElementById("b").value);
+    const data = await postJSON("/api/multiply", {a, b});
+    out.textContent = JSON.stringify(data, null, 2);
+  }
+
+  async function doArxiv() {
+    const out = document.getElementById("arxivOut");
+    out.textContent = "Loading...";
+    const query = document.getElementById("q").value;
+    const max_results = Number(document.getElementById("mr").value);
+    const data = await postJSON("/api/arxiv", {query, max_results});
+    out.textContent = JSON.stringify(data, null, 2);
+  }
+</script>
+</body>
+</html>
